@@ -1,9 +1,13 @@
 from django.shortcuts import render
 from django.contrib.auth import get_user_model
 from django.db.models import Q
+from django.http import HttpResponse
+
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from .models import Cart, CartItem, Product, Category, Review, Wishlist
+
+from .models import Cart, CartItem, Order, OrderItem, Product, Category, Review, Wishlist
 from .serializers import CartItemSerializer, CartSerializer, ProductListSerializer, ProductDetailSerializer, CategoryListSerializer, CategoryDetailSerializer, ReviewSerializer, WishlistSerializer
 
 import stripe
@@ -12,6 +16,7 @@ from django.conf import settings
 # Create your views here.
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
+endpoint_secret = settings.WEBHOOK_SECRET
 User = get_user_model()
 
 @api_view(['GET'])
@@ -179,7 +184,58 @@ def create_checkout_session(request):
             mode='payment',
             success_url='http://localhost:3000/success',
             cancel_url= 'http://localhost:3000/cancel',
+            metadata= {'cart_code': cart_code}
         )
+        item = OrderItem.objects.all()
         return Response({'data': checkout_session})
     except Exception as e:
         return Response({'error': str(e)}, status=400)
+
+
+
+
+
+@csrf_exempt
+def my_webhook_view(request):
+  payload = request.body
+  sig_header = request.META['HTTP_STRIPE_SIGNATURE']
+  event = None
+
+  try:
+    event = stripe.Webhook.construct_event(
+      payload, sig_header, endpoint_secret
+    )
+  except ValueError as e:
+    # Invalid payload
+    return HttpResponse(status=400)
+  except stripe.error.SignatureVerificationError as e:
+    # Invalid signature
+    return HttpResponse(status=400)
+
+  if (
+    event['type'] == 'checkout.session.completed'
+    or event['type'] == 'checkout.session.async_payment_succeeded'
+  ):
+    session = event['data']['object']
+    cart_code = session.get('metadata', {}).get('cart_code')
+    
+    fulfill_checkout(session, cart_code)
+
+
+  return HttpResponse(status=200)
+
+def fulfill_checkout(session, cart_code):
+    
+    order =  Order.objects.create(stripe_checkout_id=session['id'],
+                                  amount=session['amount_total']/100,
+                                  currency = session['currency'],
+                                  status='Paid')
+    
+    cart = Cart.objects.get(cart_code=cart_code)
+    cartitems = cart.cartitems.all()
+
+    for item in cartitems:
+        orderitem = OrderItem.objects.create(order=order, product=item.product, quantity=item.quantity)
+
+
+    cart.delete
