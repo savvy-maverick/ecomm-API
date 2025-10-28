@@ -1,0 +1,10 @@
+{
+  "name": "apiproject",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "python manage.py collectstatic --noinput"
+  },
+  "dependencies": {
+    "python": "3.10.6"  
+  }
+}
